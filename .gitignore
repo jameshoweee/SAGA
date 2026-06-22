@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+code/test_vectors/
+code/baseline_results.json
+code/*.eps
+code/samples.txt
+.pytest_cache/
