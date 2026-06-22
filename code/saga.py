@@ -308,6 +308,21 @@ class MultivariateSamples:
         self.covariance = cov(self.data.transpose()) / (self.exp_si ** 2)
         self.DH, self.AS, self.PO, self.PA = doornik_hansen(self.data)
         self.dc_pvalue = diagcov(self.covariance, self.nsamples)
+        self._mv_extended = None
+
+    def run_multivariate_battery(self):
+        """Run the extended multivariate test battery (Phase 5)."""
+        from multivariate_tests import run_multivariate_battery
+        per_coord_pvals = [self.univariates[i].chi2_pvalue
+                           for i in range(self.dim)]
+        self._mv_extended = run_multivariate_battery(
+            self.exp_si,
+            self.data.values,
+            self.covariance,
+            self.nsamples,
+            per_coord_pvals,
+        )
+        return self._mv_extended
 
     def __repr__(self):
         """
@@ -344,6 +359,7 @@ class MultivariateSamples:
             "anderson_scedasticity": {"stat": float(self.AS), "pvalue": float(self.PA)},
             "diagcov_pvalue": float(self.dc_pvalue),
             "gaussian_coords": {"passing": int(self.nb_gaussian_coord), "total": self.dim},
+            "extended_tests": self._mv_extended,
         }
 
     def to_json(self):
