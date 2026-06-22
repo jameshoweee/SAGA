@@ -43,18 +43,11 @@ class TestBadVectors:
 
         uv = UnivariateSamples(v["params"]["mu"], v["params"]["sigma"], v["samples"])
 
-        # Markov: perfect marginals, serial correlation. Needs Phase 4 (Ljung-Box).
-        if flaw == "markov":
-            if uv.is_valid:
-                import pytest
-                pytest.skip("Known blind spot: markov (needs Phase 4)")
-            return
-
         # First check chi-square
         if not uv.is_valid:
             return  # detected by chi-square, good
 
-        # Chi-square missed it — run extended battery
+        # Chi-square missed it — run extended battery (includes sequence tests)
         ext = uv.run_extended_battery(samples=v["samples"], mc_B=200)
         assert not ext["all_pass"], (
             f"Bad vector {v['label']} (flaw={flaw}) not detected by "
