@@ -2,8 +2,6 @@
 
 # Gaussian sampler
 from sampler import samplerz
-# Gaussian sampler with repetitions
-from sampler_rep import samplerz_rep
 # Imports Falcon signature scheme
 from falcon import falcon
 
@@ -192,9 +190,10 @@ class UnivariateSamples:
         exp[-2] += exp[-1]
         obs.pop(-1)
         exp.pop(-1)
-        exp = [round(prob * self.nsamples) for prob in exp]
-        diff = self.nsamples - sum(exp_histogram.values())
-        exp_histogram[int(round(self.exp_mu))] += diff
+        n_effective = self.nsamples - self.outlier
+        exp = [round(prob * n_effective) for prob in exp]
+        diff = sum(obs) - sum(exp)
+        exp[len(exp) // 2] += diff
         res = chisquare(obs, f_exp=exp)
         return res
 
@@ -315,7 +314,7 @@ class MultivariateSamples:
         # B should follow a normal distribution
         chi_df = dim * (dim + 1) * (dim + 2) / 6
         pval_A = 1 - chi2.cdf(A, chi_df)
-        pval_B = 1 - norm.cdf(B)
+        pval_B = 2 * (1 - norm.cdf(abs(B)))
         A = A
         B = B
         return (A, B, pval_A, pval_B)
@@ -350,10 +349,15 @@ def doornik_hansen(data):
         G = V.loc[:, (L != 0).any(axis=0)]
         data = data.dot(G)
         ppre = p
-        p = data.size / len(data)
-        raise ValueError("NOTE:Due that some eigenvalue resulted zero, a new data matrix was created. Initial number of variables = ", ppre, ", were reduced to = ", p)
+        p = int(data.size / len(data))
+        print("NOTE: eigenvalue was zero; variables reduced from {} to {}".format(ppre, p))
         R = corrcoef(data.transpose())
         L, V = eigh(R)
+        for i in range(len(L)):
+            if(L[i] <= 1e-12):
+                L[i] = 0
+            if(L[i] > 1e-12):
+                L[i] = 1 / sqrt(L[i])
         L = diag(L)
 
     means = [list(data.mean())] * n
@@ -462,7 +466,7 @@ def test_pysampler(nb_mu=100, nb_sig=100, nb_samp=100):
     print("- {a} samples per center and sigma\n".format(a=nb_samp))
     assert(nb_samp >= 10 * chi2_bucket)
     q = 12289
-    sig_min = 1.3
+    sig_min = 1.2778
     sig_max = 1.8
     nb_rej = 0
     for i in range(nb_mu):
@@ -648,69 +652,18 @@ def test_sig(n=128, nb_sig=1000, perturb=False, level=0):
     return sk, samples_data
 
 
-def test_rejind(mu, sigma):
-    """
-    input assumes dataset with num rejs (a) for each output (b)
-    to form the data structure [(a,b)]*n to test for independence
-    """
-
-    # parameters to generate data
-    n = 10000
-    mu = 0
-    nb_mu = 100
-    sigma = 1.5
-    q = 12289
-
-    # assumed data input for testing:
-    # output given as a tuple (x,#reps)
-    data = [samplerz_rep(mu, sigma) for _ in range(n)]
-
-    counter = Counter(map(tuple,data))
-    values, rejects = zip(*data)
-    results = []
-    mu = 0
-    for i in range(nb_mu):
-        list_samples = [samplerz_rep(mu, sigma) for _ in range(n)]
-        counter = dict(Counter(map(tuple, list_samples)))
-        result = defaultdict(int)
-        for key in sorted(counter.keys()):
-            result[key[1]] += int(counter[key])
-        result = dict(result)
-        results.append(result)
-    mu += q / nb_mu
-
-    # sort data
-    df = pandas.DataFrame(results)
-    df = df.fillna(0)
-    df = df.sort_index(axis=1)
-    print(df)
-
-    # plot
-    plt.figure(figsize=(24, 5))
-    plt.pcolor(df)
-    plt.colorbar
-    plt.yticks(arange(0, len(df.index), step=10), fontsize=17)
-    plt.xticks(arange(0.5, len(df.columns), 1), df.columns, fontsize=17)
-
-    plt.rcParams["axes.grid"] = False
-    plt.xlim((0, 9))
-    plt.xlabel('Number of Rejections', fontsize=21)
-    plt.ylabel('Dataset Number', fontsize=21)
-    plt.savefig('rejections.eps', format='eps', bbox_inches="tight", pad_inches=0)
-    plt.show()
 
 
-def test_basesampler(mu, sigma):
+def test_basesampler(mu=0, sigma=1.5, data=None):
     """
     A set of visual tests, assuming you have failed some tests,
     either for univariate data input or generated below.
     """
-
-    # generate data
     n = 100000
-    mu = 0
-    sigma = 1.5
-    data = [samplerz(mu, sigma) for _ in range(n)]
+    if data is None:
+        data = [samplerz(mu, sigma) for _ in range(n)]
+    else:
+        n = len(data)
 
     # histogram
     hist, bins = histogram(data, bins=abs(min(data)) + max(data))

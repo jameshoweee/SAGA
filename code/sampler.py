@@ -9,7 +9,8 @@ if sys.version_info >= (3, 4):
 # Upper bound on all the values of sigma
 sigma0 = 1.8205
 # Lower bound on all the values of sigma
-sigmin = 1.3
+# Falcon spec: 1.277833697 (n=512), 1.298280334 (n=1024)
+sigmin = 1.2778
 # Precision of the CDT
 cdt_precision = 72
 
@@ -155,7 +156,7 @@ def samplerz(center, sigma):
     assert(sigma >= sigmin)
     # c0 is the fractional part of center
     c0 = center - floor(center)
-    sf = sigma / sigma0
+    sf = sigmin / sigma
     while(1):
         z0 = sampler0()
         b = randint(0, 1)
