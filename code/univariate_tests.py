@@ -380,6 +380,168 @@ def higher_criticism(mu, sigma, samples, tau=14, alpha=0.001,
 
 
 # ---------------------------------------------------------------------------
+# 4.1 Ljung-Box autocorrelation test
+# ---------------------------------------------------------------------------
+
+def ljung_box(samples, max_lag=20, alpha=0.001):
+    """
+    Ljung-Box test for serial autocorrelation.
+
+    Q(h) = n(n+2) * sum_{k=1}^{h} r_k^2 / (n-k) ~ chi2(h)
+
+    Detects serial dependence that all distributional tests miss
+    (e.g., Markov-coupled samplers with perfect marginals).
+    """
+    samples = np.asarray(samples, dtype=float)
+    n = len(samples)
+    h = min(max_lag, n // 5)
+
+    mean = np.mean(samples)
+    centered = samples - mean
+    var = np.sum(centered ** 2)
+
+    if var == 0:
+        return {"test": "ljung_box", "statistic": 0.0,
+                "pvalue": 1.0, "lags": h, "passes": True}
+
+    Q = 0.0
+    lag_details = {}
+    for k in range(1, h + 1):
+        rk = np.sum(centered[k:] * centered[:-k]) / var
+        Q += rk ** 2 / (n - k)
+        lag_details[k] = float(rk)
+
+    Q *= n * (n + 2)
+
+    from scipy.stats import chi2 as chi2_dist
+    pvalue = 1 - chi2_dist.cdf(Q, h)
+
+    return {
+        "test": "ljung_box",
+        "statistic": float(Q),
+        "pvalue": float(pvalue),
+        "lags": h,
+        "passes": pvalue > alpha,
+        "autocorrelations": {str(k): v for k, v in
+                             list(lag_details.items())[:5]},
+    }
+
+
+# ---------------------------------------------------------------------------
+# 4.2 Wald-Wolfowitz runs test
+# ---------------------------------------------------------------------------
+
+def runs_test(samples, alpha=0.001):
+    """
+    Wald-Wolfowitz runs test.
+
+    Tests whether the sequence of above/below-median values forms
+    a random pattern. Too few runs = positive autocorrelation,
+    too many = negative autocorrelation.
+    """
+    samples = np.asarray(samples, dtype=float)
+    n = len(samples)
+    median = np.median(samples)
+
+    above = samples > median
+    n1 = int(np.sum(above))
+    n2 = n - n1
+
+    if n1 == 0 or n2 == 0:
+        return {"test": "runs_test", "statistic": 0.0,
+                "pvalue": 1.0, "passes": True}
+
+    runs = 1 + int(np.sum(above[1:] != above[:-1]))
+
+    E_R = 1 + 2 * n1 * n2 / (n1 + n2)
+    Var_R = (2 * n1 * n2 * (2 * n1 * n2 - n1 - n2)) / \
+            ((n1 + n2) ** 2 * (n1 + n2 - 1))
+
+    if Var_R <= 0:
+        return {"test": "runs_test", "statistic": 0.0,
+                "pvalue": 1.0, "passes": True}
+
+    Z = (runs - E_R) / sqrt(Var_R)
+    from scipy.stats import norm
+    pvalue = 2 * (1 - norm.cdf(abs(Z)))
+
+    return {
+        "test": "runs_test",
+        "statistic": float(Z),
+        "pvalue": float(pvalue),
+        "runs": runs,
+        "expected_runs": float(E_R),
+        "passes": pvalue > alpha,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 4.3 Block homogeneity (drift detection)
+# ---------------------------------------------------------------------------
+
+def block_homogeneity(mu, sigma, samples, n_blocks=10, tau=14,
+                      alpha=0.001):
+    """
+    Split the stream into blocks and test distributional homogeneity.
+
+    Chi-square homogeneity test across blocks x buckets. Catches
+    mid-run drift or state corruption invisible to pooled tests.
+    """
+    samples = np.asarray(samples)
+    n = len(samples)
+    block_size = n // n_blocks
+    if block_size < 50:
+        return {"test": "block_homogeneity", "statistic": 0.0,
+                "pvalue": 1.0, "passes": True,
+                "note": "insufficient samples for block test"}
+
+    support, probs = pdt_arrays(mu, sigma, tau)
+
+    zmax = int(np.ceil(tau * sigma))
+    lo = int(np.floor(mu)) - zmax
+    nbins = min(10, len(support))
+    bin_edges = np.linspace(lo, lo + len(support), nbins + 1)
+
+    observed = np.zeros((n_blocks, nbins))
+    for b in range(n_blocks):
+        block = samples[b * block_size:(b + 1) * block_size]
+        hist, _ = np.histogram(block, bins=bin_edges)
+        observed[b] = hist
+
+    col_totals = observed.sum(axis=0)
+    row_totals = observed.sum(axis=1)
+    grand_total = observed.sum()
+
+    if grand_total == 0:
+        return {"test": "block_homogeneity", "statistic": 0.0,
+                "pvalue": 1.0, "passes": True}
+
+    chi2_stat = 0.0
+    for b in range(n_blocks):
+        for j in range(nbins):
+            expected = row_totals[b] * col_totals[j] / grand_total
+            if expected > 0:
+                chi2_stat += (observed[b][j] - expected) ** 2 / expected
+
+    df = (n_blocks - 1) * (nbins - 1)
+    if df <= 0:
+        return {"test": "block_homogeneity", "statistic": 0.0,
+                "pvalue": 1.0, "passes": True}
+
+    from scipy.stats import chi2 as chi2_dist
+    pvalue = 1 - chi2_dist.cdf(chi2_stat, df)
+
+    return {
+        "test": "block_homogeneity",
+        "statistic": float(chi2_stat),
+        "pvalue": float(pvalue),
+        "df": df,
+        "n_blocks": n_blocks,
+        "passes": pvalue > alpha,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Extended battery runner
 # ---------------------------------------------------------------------------
 
@@ -400,11 +562,16 @@ def run_extended_battery(mu, sigma, samples, tau=14, alpha=0.001,
         mu, sigma, samples, tau=tau, alpha=alpha, mc_B=mc_B)
     results["higher_criticism"] = higher_criticism(
         mu, sigma, samples, tau=tau, alpha=alpha, mc_B=mc_B)
+    results["ljung_box"] = ljung_box(samples, alpha=alpha)
+    results["runs_test"] = runs_test(samples, alpha=alpha)
+    results["block_homogeneity"] = block_homogeneity(
+        mu, sigma, samples, tau=tau, alpha=alpha)
 
     all_pass = all(
         results[t].get("passes", True)
         for t in ["tail_exceedance", "sign_halfgaussian",
-                  "discrete_ad", "higher_criticism"]
+                  "discrete_ad", "higher_criticism",
+                  "ljung_box", "runs_test", "block_homogeneity"]
     )
     results["all_pass"] = all_pass
 
