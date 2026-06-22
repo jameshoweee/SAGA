@@ -157,21 +157,66 @@ class UnivariateSamples:
         rep += "Is the sample valid? {i}".format(i=self.is_valid)
         return rep
 
+    def effect_sizes(self):
+        """
+        Compute TV distance and R_2 divergence as effect-size diagnostics.
+
+        These are NOT security certification — they resolve deviations
+        of order ~1/sqrt(N) only. See certification.py for proof-level
+        Renyi divergence bounds.
+        """
+        pdt = make_gaussian_pdt(self.exp_mu, self.exp_sigma)
+        n_eff = self.nsamples - self.outlier
+        if n_eff == 0:
+            return {"tv_distance": None, "r2_divergence": None}
+
+        tv = 0.0
+        chi2_unbucketed = 0.0
+        tv_null = 0.0
+        for z in pdt:
+            p_ideal = pdt[z]
+            p_emp = self.histogram.get(z, 0) / n_eff
+            tv += abs(p_emp - p_ideal)
+            if p_ideal > 0:
+                chi2_unbucketed += (p_emp - p_ideal) ** 2 / p_ideal
+            tv_null += sqrt(2 * p_ideal / (3.14159265 * n_eff))
+
+        tv *= 0.5
+        tv_null *= 0.5
+        r2 = log(1 + chi2_unbucketed)
+
+        return {
+            "tv_distance": tv,
+            "tv_null_expected": tv_null,
+            "r2_divergence": r2,
+            "resolution_floor": 1.0 / sqrt(n_eff),
+        }
+
     def to_dict(self):
+        es = self.effect_sizes()
         return {
             "test": "univariate",
-            "params": {"mu": self.exp_mu, "sigma": self.exp_sigma, "n": self.nsamples,
-                        "tau": self.tau, "chi2_bucket": self.chi2_bucket, "pmin": self.pmin},
+            "params": {
+                "mu": self.exp_mu, "sigma": self.exp_sigma,
+                "n": self.nsamples,
+                "tau": self.tau, "chi2_bucket": self.chi2_bucket,
+                "pmin": self.pmin,
+            },
             "chi2_stat": float(self.chi2_stat),
             "chi2_pvalue": float(self.chi2_pvalue),
             "outliers": self.outlier,
             "is_valid": bool(self.is_valid),
             "moments": {
-                "mean": {"expected": self.exp_mu, "empirical": float(self.mean)},
-                "stdev": {"expected": self.exp_sigma, "empirical": float(self.stdev)},
-                "skewness": {"expected": 0, "empirical": float(self.skewness)},
-                "kurtosis": {"expected": 0, "empirical": float(self.kurtosis)},
-            }
+                "mean": {"expected": self.exp_mu,
+                         "empirical": float(self.mean)},
+                "stdev": {"expected": self.exp_sigma,
+                          "empirical": float(self.stdev)},
+                "skewness": {"expected": 0,
+                             "empirical": float(self.skewness)},
+                "kurtosis": {"expected": 0,
+                             "empirical": float(self.kurtosis)},
+            },
+            "effect_sizes": es,
         }
 
     def to_json(self):
