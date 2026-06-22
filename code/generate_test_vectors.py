@@ -489,8 +489,37 @@ def build_multivariate_vectors(n, seed):
         "samples": multivariate_fft_tree_zeroed(rng, dim, sigma, n, 3)
     })
 
-    # Mediocre: weak single-pair correlation (rho=0.1)
+    # Bad: inflated norm (all coordinates positively correlated)
     rng = np.random.default_rng(seed + 104)
+    data_norm = rng.normal(0, sigma, size=(n, dim))
+    shared = rng.normal(0, sigma * 0.3, size=n)
+    data_norm += shared[:, np.newaxis]
+    vectors.append({
+        "label": "mv_bad_norm_inflated",
+        "tier": "bad",
+        "description": f"All coords share a common factor (norm inflated), dim={dim}",
+        "params": {"sigma": sigma, "dim": dim, "n": n},
+        "flaw": {"type": "norm_inflation", "shared_sigma_fraction": 0.3},
+        "samples": data_norm.tolist()
+    })
+
+    # Bad: two different distributions (simulates key-dependent output)
+    rng = np.random.default_rng(seed + 105)
+    data_key1 = rng.normal(0, sigma, size=(n // 2, dim))
+    data_key2 = rng.normal(0, sigma * 1.05, size=(n // 2, dim))
+    vectors.append({
+        "label": "mv_bad_cross_key",
+        "tier": "bad",
+        "description": f"Mixed: half from sigma, half from sigma*1.05, dim={dim}",
+        "params": {"sigma": sigma, "dim": dim, "n": n},
+        "flaw": {"type": "cross_key", "sigma_ratio": 1.05},
+        "samples": np.vstack([data_key1, data_key2]).tolist(),
+        "samples_key1": data_key1.tolist(),
+        "samples_key2": data_key2.tolist(),
+    })
+
+    # Mediocre: weak single-pair correlation (rho=0.1)
+    rng = np.random.default_rng(seed + 106)
     vectors.append({
         "label": "mv_med_weak_corr",
         "tier": "mediocre",
@@ -498,6 +527,25 @@ def build_multivariate_vectors(n, seed):
         "params": {"sigma": sigma, "dim": dim, "n": n},
         "flaw": {"type": "correlated_pair", "pair": [0, 1], "rho": 0.1},
         "samples": multivariate_inflated_correlation(rng, dim, sigma, n, 0.1, (0, 1))
+    })
+
+    # Mediocre: FFT frequency with reduced (not zeroed) variance
+    rng = np.random.default_rng(seed + 107)
+    half = dim // 2
+    data_fft_weak = []
+    for _ in range(n):
+        coeffs = rng.normal(0, sigma, size=half) + 1j * rng.normal(0, sigma, size=half)
+        coeffs[5] *= 0.7  # 70% of normal variance at freq 5
+        sig_half = np.fft.irfft(coeffs, n=half)
+        sig2 = rng.normal(0, sigma, size=half)
+        data_fft_weak.append(np.concatenate([sig_half, sig2]).tolist())
+    vectors.append({
+        "label": "mv_med_fft_weak",
+        "tier": "mediocre",
+        "description": f"FFT freq 5 at 70% variance, dim={dim}",
+        "params": {"sigma": sigma, "dim": dim, "n": n},
+        "flaw": {"type": "fft_weak", "freq": 5, "factor": 0.7},
+        "samples": data_fft_weak,
     })
 
     return vectors
