@@ -322,20 +322,20 @@ def build_univariate_vectors(n, seed):
                                                   int(mode_idx + 2), 3.0)
         })
 
-        # Truncated at 6-sigma
+        # Truncated at 3-sigma (detectable: removes ~30 expected samples)
         rng = np.random.default_rng(seed + 6)
         vectors.append({
-            "label": f"bad_truncated_6sig_{tag}",
+            "label": f"bad_truncated_3sig_{tag}",
             "tier": "bad",
-            "description": f"Tails truncated at 6*sigma, mu={mu}",
+            "description": f"Tails truncated at 3*sigma, mu={mu}",
             "params": {"mu": mu, "sigma": sigma, "n": n},
-            "flaw": {"type": "tail_truncation", "tail_sigma": 6},
+            "flaw": {"type": "tail_truncation", "tail_sigma": 3},
             "expected_detection": {
                 "chi2": False, "AD": True, "HC": False,
                 "sign_test": False, "ljung_box": False,
                 "tail_exceedance": True, "norm_test": False
             },
-            "samples": sample_truncated_tails(rng, support, probs, n, 6, mu, sigma)
+            "samples": sample_truncated_tails(rng, support, probs, n, 3, mu, sigma)
         })
 
         # Correlated (Markov, rho=0.3)

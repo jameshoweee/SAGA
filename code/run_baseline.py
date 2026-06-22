@@ -34,6 +34,13 @@ def run_univariate(vector):
         results["empirical_stdev"] = float(uv.stdev)
         results["empirical_skewness"] = float(uv.skewness)
         results["empirical_kurtosis"] = float(uv.kurtosis)
+        ext = uv.run_extended_battery(samples=samples, mc_B=200)
+        results["extended_pass"] = ext["all_pass"]
+        results["is_valid_extended"] = bool(uv.is_valid_extended)
+        results["extended_details"] = {
+            k: ext[k].get("passes", None) if isinstance(ext[k], dict) else ext[k]
+            for k in ext if k != "all_pass"
+        }
         results["error"] = None
     except Exception as e:
         results["error"] = str(e)
@@ -70,7 +77,7 @@ def main():
         if result["error"]:
             status = "ERROR"
             counts[tier]["error"] += 1
-        elif result["is_valid"]:
+        elif result.get("is_valid_extended", result["is_valid"]):
             status = "PASS"
             counts[tier]["pass"] += 1
         else:
@@ -86,7 +93,13 @@ def main():
             correct = ""
 
         flaw_type = vector["flaw"]["type"]
-        print(f"  [{status:>5}] {label:<45} flaw={flaw_type:<20} {correct}")
+        ext_note = ""
+        if not result["error"] and result.get("extended_pass") is not None:
+            if not result["is_valid"] and result["is_valid"]:
+                ext_note = ""
+            elif result["is_valid"] and not result.get("is_valid_extended", True):
+                ext_note = " [extended caught]"
+        print(f"  [{status:>5}] {label:<45} flaw={flaw_type:<20} {correct}{ext_note}")
 
         all_results.append({
             "label": label,
@@ -118,9 +131,20 @@ def main():
         print(f"Good vector false alarm rate: {counts['good']['fail']}/{good_total} = {false_alarm:.1f}%")
 
     # Save
+    class NumpyEncoder(json.JSONEncoder):
+        def default(self, obj):
+            import numpy as np
+            if isinstance(obj, (np.bool_, np.integer)):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return super().default(obj)
+
     outpath = "baseline_results.json"
     with open(outpath, 'w') as f:
-        json.dump(all_results, f, indent=2)
+        json.dump(all_results, f, indent=2, cls=NumpyEncoder)
     print(f"\nDetailed results: {os.path.abspath(outpath)}")
 
 
