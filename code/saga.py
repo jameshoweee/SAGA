@@ -133,6 +133,21 @@ class UnivariateSamples:
         self.is_valid = True
         self.is_valid &= (self.chi2_pvalue > self.pmin)
         self.is_valid &= (self.outlier == 0)
+        self._extended = None
+
+
+    def run_extended_battery(self, samples=None, mc_B=1000):
+        """Run the extended test battery (Phase 3 tests)."""
+        from univariate_tests import run_extended_battery
+        if samples is None:
+            samples = [z for z in self.histogram
+                       for _ in range(self.histogram[z])]
+        self._extended = run_extended_battery(
+            self.exp_mu, self.exp_sigma, samples,
+            tau=self.tau, alpha=self.pmin, mc_B=mc_B,
+        )
+        self.is_valid_extended = self.is_valid and self._extended["all_pass"]
+        return self._extended
 
 
     def __repr__(self):
@@ -217,6 +232,8 @@ class UnivariateSamples:
                              "empirical": float(self.kurtosis)},
             },
             "effect_sizes": es,
+            "extended_tests": self._extended,
+            "is_valid_extended": getattr(self, 'is_valid_extended', None),
         }
 
     def to_json(self):

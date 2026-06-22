@@ -23,9 +23,19 @@ class TestGoodVectors:
         uv = UnivariateSamples(v["params"]["mu"], v["params"]["sigma"], v["samples"])
         assert uv.outlier == 0
 
+    def test_extended_battery_passes(self, good_univariate_vector):
+        v = good_univariate_vector
+        uv = UnivariateSamples(v["params"]["mu"], v["params"]["sigma"], v["samples"])
+        ext = uv.run_extended_battery(samples=v["samples"], mc_B=200)
+        assert ext["all_pass"], (
+            f"Good vector {v['label']} fails extended battery: "
+            + ", ".join(k for k, r in ext.items()
+                        if isinstance(r, dict) and not r.get("passes", True))
+        )
+
 
 class TestBadVectors:
-    """Flawed distributions must be detected (is_valid == False)."""
+    """Flawed distributions must be detected by chi-square or extended battery."""
 
     def test_detected(self, bad_univariate_vector):
         v = bad_univariate_vector
@@ -33,20 +43,23 @@ class TestBadVectors:
 
         uv = UnivariateSamples(v["params"]["mu"], v["params"]["sigma"], v["samples"])
 
-        # Known blind spots: current chi-square cannot detect these
-        known_blind_spots = {"markov", "tail_truncation"}
-
-        if flaw in known_blind_spots:
+        # Markov: perfect marginals, serial correlation. Needs Phase 4 (Ljung-Box).
+        if flaw == "markov":
             if uv.is_valid:
                 import pytest
-                pytest.skip(f"Known blind spot: {flaw} (needs Phase 3/4 tests)")
-            else:
-                pass  # detected despite being a known blind spot — good
-        else:
-            assert not uv.is_valid, (
-                f"Bad vector {v['label']} (flaw={flaw}) was not detected "
-                f"(chi2_p={uv.chi2_pvalue:.6f})"
-            )
+                pytest.skip("Known blind spot: markov (needs Phase 4)")
+            return
+
+        # First check chi-square
+        if not uv.is_valid:
+            return  # detected by chi-square, good
+
+        # Chi-square missed it — run extended battery
+        ext = uv.run_extended_battery(samples=v["samples"], mc_B=200)
+        assert not ext["all_pass"], (
+            f"Bad vector {v['label']} (flaw={flaw}) not detected by "
+            f"chi-square or extended battery"
+        )
 
 
 class TestMediocreVectors:
@@ -55,5 +68,4 @@ class TestMediocreVectors:
     def test_runs(self, mediocre_univariate_vector):
         v = mediocre_univariate_vector
         uv = UnivariateSamples(v["params"]["mu"], v["params"]["sigma"], v["samples"])
-        # Just verify it doesn't crash; record result for the power matrix
         assert uv.chi2_pvalue is not None
