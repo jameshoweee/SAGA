@@ -1,5 +1,7 @@
 ### Importing dependencies
 
+import json
+
 # Gaussian sampler
 from sampler import samplerz
 # Imports Falcon signature scheme
@@ -41,18 +43,11 @@ from numpy import sqrt as npsqrt
 # mvn plot test
 from numpy import histogram
 
-# rejection testing
-from collections import Counter, defaultdict
-from numpy import arange
 
 # import csv files
 import csv
 
-# For debugging purposes
-import sys
 import time
-if sys.version_info >= (3, 4):
-    from importlib import reload  # Python 3.4+ only.
 
 
 # Tailcut rate
@@ -93,20 +88,19 @@ class UnivariateSamples:
     Class for computing statistics on univariate Gaussian samples.
     """
 
-    def __init__(self, mu, sigma, list_samples):
+    def __init__(self, mu, sigma, list_samples, tau=14, chi2_bucket=10, pmin=0.001):
         """
         Input:
         - the expected center mu of a discrete Gaussian over Z
         - the expected standard deviation sigma of a discrete Gaussian over Z
         - a list of samples defining an empiric distribution
-
-        Output:
-        - the means of the expected and empiric distributions
-        - the standard deviations of the expected and empiric distributions
-        - the skewness of the expected and empiric distributions
-        - the kurtosis of the expected and empiric distributions
-        - a chi-square test between the two distributions
+        - tau: tail cutoff in units of sigma (default 14)
+        - chi2_bucket: minimum expected count per bucket (default 10)
+        - pmin: significance threshold for chi-square (default 0.001)
         """
+        self.tau = tau
+        self.chi2_bucket = chi2_bucket
+        self.pmin = pmin
         zmax = ceil(tau * sigma)
         # Expected center standard variation.
         self.exp_mu = mu
@@ -137,7 +131,7 @@ class UnivariateSamples:
         # - the chi-square p-value is higher than pmin
         # - there is no outlier
         self.is_valid = True
-        self.is_valid &= (self.chi2_pvalue > pmin)
+        self.is_valid &= (self.chi2_pvalue > self.pmin)
         self.is_valid &= (self.outlier == 0)
 
 
@@ -156,12 +150,32 @@ class UnivariateSamples:
         rep += "Kurtosis |   {exp:.5f}      {emp:.5f}\n".format(exp=0, emp=self.kurtosis)
         rep += "\n"
         rep += "Chi-2 statistic:   {stat}\n".format(stat=self.chi2_stat)
-        rep += "Chi-2 p-value:     {pval}   (should be > {p})\n".format(pval=self.chi2_pvalue, p=pmin)
+        rep += "Chi-2 p-value:     {pval}   (should be > {p})\n".format(pval=self.chi2_pvalue, p=self.pmin)
         rep += "\n"
         rep += "How many outliers? {o}".format(o=self.outlier)
         rep += "\n\n"
         rep += "Is the sample valid? {i}".format(i=self.is_valid)
         return rep
+
+    def to_dict(self):
+        return {
+            "test": "univariate",
+            "params": {"mu": self.exp_mu, "sigma": self.exp_sigma, "n": self.nsamples,
+                        "tau": self.tau, "chi2_bucket": self.chi2_bucket, "pmin": self.pmin},
+            "chi2_stat": float(self.chi2_stat),
+            "chi2_pvalue": float(self.chi2_pvalue),
+            "outliers": self.outlier,
+            "is_valid": bool(self.is_valid),
+            "moments": {
+                "mean": {"expected": self.exp_mu, "empirical": float(self.mean)},
+                "stdev": {"expected": self.exp_sigma, "empirical": float(self.stdev)},
+                "skewness": {"expected": 0, "empirical": float(self.skewness)},
+                "kurtosis": {"expected": 0, "empirical": float(self.kurtosis)},
+            }
+        }
+
+    def to_json(self):
+        return json.dumps(self.to_dict(), indent=2)
 
     def chisquare(self):
         """
@@ -180,7 +194,7 @@ class UnivariateSamples:
         while(1):
             if (z >= len(exp) - 1):
                 break
-            while (z < len(exp) - 1) and (exp[z] < chi2_bucket / self.nsamples):
+            while (z < len(exp) - 1) and (exp[z] < self.chi2_bucket / self.nsamples):
                 obs[z + 1] += obs[z]
                 exp[z + 1] += exp[z]
                 obs.pop(z)
@@ -259,6 +273,19 @@ class MultivariateSamples:
         rep += "\n"
         rep += "4 - Gaussian coordinates (w/ st. dev. = sigma)?    {k} out of {dim}\n".format(k=self.nb_gaussian_coord, dim=self.dim)
         return rep
+
+    def to_dict(self):
+        return {
+            "test": "multivariate",
+            "params": {"sigma": self.exp_si, "dim": self.dim, "n": self.nsamples},
+            "doornik_hansen": {"stat": float(self.DH), "pvalue": float(self.PO)},
+            "anderson_scedasticity": {"stat": float(self.AS), "pvalue": float(self.PA)},
+            "diagcov_pvalue": float(self.dc_pvalue),
+            "gaussian_coords": {"passing": int(self.nb_gaussian_coord), "total": self.dim},
+        }
+
+    def to_json(self):
+        return json.dumps(self.to_dict(), indent=2)
 
     def show_covariance(self):
         """
@@ -345,15 +372,19 @@ def doornik_hansen(data):
     L = diag(L)
 
     if(matrix_rank(R) < p):
-        V = pandas.DataFrame(V)
-        G = V.loc[:, (L != 0).any(axis=0)]
-        data = data.dot(G)
+        L_diag = array([L[i, i] for i in range(p)])
+        nonzero = [i for i in range(p) if L_diag[i] > 0]
+        if len(nonzero) == 0:
+            return 0, 0, 0, 0
+        data = data.iloc[:, nonzero].reset_index(drop=True)
+        data.columns = range(len(nonzero))
         ppre = p
-        p = int(data.size / len(data))
-        print("NOTE: eigenvalue was zero; variables reduced from {} to {}".format(ppre, p))
+        p = len(nonzero)
+        print("NOTE: eigenvalue was zero; variables reduced "
+              "from {} to {}".format(ppre, p))
         R = corrcoef(data.transpose())
         L, V = eigh(R)
-        for i in range(len(L)):
+        for i in range(p):
             if(L[i] <= 1e-12):
                 L[i] = 0
             if(L[i] > 1e-12):
