@@ -3,61 +3,55 @@
 #include <time.h>
 #include <stdlib.h>
 
-// looks like the "cdf" is actually a "pdf"
+/*
+ * Sample from the half-Gaussian distribution using the RCDT (reverse CDT).
+ *
+ * The table below is the RCDT of the half-Gaussian with sigma_0 = 1.8205,
+ * matching Falcon's reference implementation. Each row is a 72-bit threshold
+ * stored as three 24-bit limbs (big-endian within the row).
+ *
+ * The sampler draws a uniform 72-bit value and counts how many thresholds
+ * it exceeds; the count is the output z0 in {0, ..., 18}.
+ */
 
 int gaussian0()
 {
-    static const uint32_t dist[] = {
+    static const uint32_t rcdt[] = {
          6031371U, 13708371U, 13035518U,
-         5186761U,  1487980U, 12270720U,
-         3298653U,  4688887U,  5511555U,
-         1551448U,  9247616U,  9467675U,
-          539632U, 14076116U,  5909365U,
-          138809U, 10836485U, 13263376U,
-           26405U, 15335617U, 16601723U,
-            3714U, 14514117U, 13240074U,
-             386U,  8324059U,  3276722U,
-              29U, 12376792U,  7821247U,
-               1U, 11611789U,  3398254U,
-               0U,  1194629U,  4532444U,
-               0U,    37177U,  2973575U,
-               0U,      855U, 10369757U,
-               0U,       14U,  9441597U,
-               0U,        0U,  3075302U,
-               0U,        0U,    28626U,
-               0U,        0U,      197U,
-               0U,        0U,        1U
+        11218132U, 15196352U,  8529022U,
+        14516786U,  3108023U, 14040577U,
+        16068234U, 12355640U,  6731036U,
+        16607867U,  9654540U, 12640401U,
+        16746677U,  3713810U,  9126561U,
+        16773083U,  2272212U,  8951068U,
+        16776798U,     9114U,  5413926U,
+        16777184U,  8333173U,  8690648U,
+        16777214U,  3932749U, 16511895U,
+        16777215U, 15544539U,  3132933U,
+        16777215U, 16739168U,  7665377U,
+        16777215U, 16776345U, 10638952U,
+        16777215U, 16777201U,  4231493U,
+        16777215U, 16777215U, 13673090U,
+        16777215U, 16777215U, 16748392U,
+        16777215U, 16777215U, 16777018U,
+        16777215U, 16777215U, 16777215U
     };
 
     uint32_t v0, v1, v2;
     size_t u;
     int z;
 
-/*
-    for (int i = 0; i < 3 * 19; i += 3) {
-        printf("%06X%06X%06X\n",
-            dist[i], dist[i + 1], dist[i + 2]);
-    }
-*/
-
-    /*
-     * Get a random 72-bit value, into three 24-bit limbs v0..v2.
-     */
     v0 = lrand48() & 0xFFFFFF;
     v1 = lrand48() & 0xFFFFFF;
     v2 = lrand48() & 0xFFFFFF;
 
-    /*
-     * Sampled value is z, such that v0..v2 is lower than the first
-     * z elements of the table.
-     */
     z = 0;
-    for (u = 0; u < (sizeof dist) / sizeof(dist[0]); u += 3) {
+    for (u = 0; u < (sizeof rcdt) / sizeof(rcdt[0]); u += 3) {
         uint32_t w0, w1, w2, cc;
 
-        w0 = dist[u + 2];
-        w1 = dist[u + 1];
-        w2 = dist[u + 0];
+        w0 = rcdt[u + 2];
+        w1 = rcdt[u + 1];
+        w2 = rcdt[u + 0];
         cc = (v0 - w0) >> 31;
         cc = (v1 - w1 - cc) >> 31;
         cc = (v2 - w2 - cc) >> 31;
@@ -67,27 +61,23 @@ int gaussian0()
 }
 
 
-
 int main()
 {
-	FILE *f = fopen("samples.txt", "a");
-
-    int b, z0, z, i;
-	int sample_size=1000000;
+    FILE *f = fopen("samples.txt", "a");
+    int b, z0, z;
+    int sample_size = 1000000;
 
     srand48(time(NULL));
 
-    for (i=1;i<=sample_size;i++) {
-		
-		i=i+1;
+    for (int i = 0; i < sample_size; i++) {
         z0 = gaussian0();
         b = lrand48() & 1;
         z = b + ((b << 1) - 1) * z0;
 
         printf("%d\n", z);
-        fprintf(f,"%d\n", z);
-    }	
-	fclose(f);
+        fprintf(f, "%d\n", z);
+    }
+    fclose(f);
 
     return 0;
 }
