@@ -3,7 +3,10 @@ name = "saga"
 version = "2.0.0-dev"
 description = "Statistically Acceptable GAussians — test suite for discrete Gaussian samplers"
 requires-python = ">=3.10"
-license = "MIT"
+# The repository ships under the PQShield Ltd. non-commercial research
+# licence (see LICENCE) -- NOT MIT. Point at the file rather than assert
+# an SPDX identifier that would misstate the terms.
+license = {file = "LICENCE"}
 authors = [
     {name = "James Howe"},
     {name = "Thomas Prest"},

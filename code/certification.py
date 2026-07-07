@@ -131,7 +131,11 @@ def certify_base_sampler(a_orders=None):
         ra = renyi_divergence(P, Q, a)
         rd_results[label] = float(ra)
         if a != 'inf' and a != 2:
-            rd_results[f"{label}_minus_1"] = float(mpmath.exp(ra * (mpmath.mpf(a) - 1)) - 1)
+            # renyi_divergence returns log(R_a) in the [Pre17] ratio
+            # convention, so R_a - 1 = exp(ra) - 1. (exp(ra*(a-1)) - 1
+            # would be Sum p^a/q^(a-1) - 1 ~ (a-1)(R_a - 1), a factor
+            # a-1 too large vs the requirement's convention.)
+            rd_results[f"{label}_minus_1"] = float(mpmath.exp(ra) - 1)
 
     results["renyi_divergences"] = rd_results
     results["total_variation"] = float(total_variation(P, Q))
@@ -144,7 +148,7 @@ def certify_base_sampler(a_orders=None):
     for target_name, target in SECURITY_TARGETS.items():
         a = target["order"]
         ra = renyi_divergence(P, Q, a)
-        ra_minus_1 = mpmath.exp(ra * (mpmath.mpf(a) - 1)) - 1
+        ra_minus_1 = mpmath.exp(ra) - 1
         results["security_check"][target_name] = {
             "order": a,
             "R_a": float(ra),
@@ -257,7 +261,7 @@ def certify_full_sampler(sigma, mu, a_orders=None, tau=TAU):
     for target_name, target in SECURITY_TARGETS.items():
         a = target["order"]
         ra = renyi_divergence(P_spec, Q_ideal, a)
-        ra_minus_1 = mpmath.exp(ra * (mpmath.mpf(a) - 1)) - 1
+        ra_minus_1 = mpmath.exp(ra) - 1
         passes = ra_minus_1 <= target["max_ra_minus_1"]
         results["security_check"][target_name] = {
             "order": a,

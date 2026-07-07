@@ -12,7 +12,7 @@ Tests:
 """
 
 import numpy as np
-from math import sqrt, log
+from math import sqrt
 from scipy.stats import kstest, chi2, norm
 from scipy.stats import false_discovery_control
 
@@ -84,40 +84,49 @@ def fisher_bh_meta(pvalues, alpha=0.001):
 # 5.3 Max off-diagonal correlation
 # ---------------------------------------------------------------------------
 
-def max_offdiag_correlation(cov_normalized, nsamples, alpha=0.001):
+def max_offdiag_correlation(cov_normalized, nsamples, alpha=0.001,
+                            mc_B=200, seed=47):
     """
     max_{i<j} |rho_hat_{ij}| from the normalized covariance matrix.
 
     diagcov sums diagonals, diluting a single bad pair. This catches
     one pair sharing randomness (e.g., AVX2 lane reuse).
 
-    Approximate null via Jiang's Gumbel limit for large p.
+    Null is MC-calibrated: the max is taken over dim*(dim-1)/2 dependent
+    pairs, which a log(dim) Gumbel centering miscalibrates (borderline
+    false alarms at large dim). We instead take the max |corr| over B
+    iid N(0, I) datasets of the same (nsamples, dim) shape, which
+    captures both the pair count and the inter-pair dependence.
     """
+    cov_normalized = np.asarray(cov_normalized)
     dim = cov_normalized.shape[0]
 
-    max_rho = 0.0
-    max_pair = (0, 0)
-    for i in range(dim):
-        for j in range(i + 1, dim):
-            rho = abs(cov_normalized[i, j])
-            if rho > max_rho:
-                max_rho = rho
-                max_pair = (i, j)
+    iu = np.triu_indices(dim, k=1)
+    abs_offdiag = np.abs(cov_normalized[iu])
+    max_rho = float(np.max(abs_offdiag))
+    flat_idx = int(np.argmax(abs_offdiag))
+    max_pair = (int(iu[0][flat_idx]), int(iu[1][flat_idx]))
+
+    rng = np.random.default_rng(seed)
+    null_max = np.empty(mc_B)
+    for b in range(mc_B):
+        Z = rng.standard_normal((nsamples, dim))
+        C = np.corrcoef(Z, rowvar=False)
+        null_max[b] = np.max(np.abs(C[iu]))
+
+    # (1 + #{null >= obs}) / (B + 1): unbiased, never yields p = 0.
+    pval = (1 + int(np.sum(null_max >= max_rho))) / (mc_B + 1)
 
     se = 1.0 / sqrt(nsamples - 3)
     z_score = max_rho / se
-
-    a_n = sqrt(2 * log(dim)) - (log(log(dim)) + log(4 * np.pi)) / (2 * sqrt(2 * log(dim)))
-    b_n = 1.0 / sqrt(2 * log(dim))
-    gumbel_x = (max_rho * sqrt(nsamples) - a_n) / b_n
-    pval = 1 - np.exp(-np.exp(-gumbel_x))
 
     return {
         "test": "max_offdiag_correlation",
         "max_rho": float(max_rho),
         "max_pair": list(max_pair),
         "z_score": float(z_score),
-        "gumbel_pvalue": float(pval),
+        "pvalue": float(pval),
+        "mc_replicates": mc_B,
         "passes": pval > alpha,
     }
 
@@ -156,11 +165,18 @@ def fft_domain_battery(sigma, data, alpha=0.001):
             re = np.real(fft_coeffs[:, k])
             im = np.imag(fft_coeffs[:, k])
 
-            var_k = (np.var(re) + np.var(im)) / 2
+            # Re and Im each contribute n centered values with variance
+            # expected_var, so S_re/expected_var and S_im/expected_var are
+            # each ~chi2(n-1); their sum is ~chi2(2(n-1)). Testing the
+            # summed statistic (not the average against chi2(n-1)) recovers
+            # the ~sqrt(2) power the averaged form gives up.
             expected_var = sigma ** 2 * half / 2
-            chi2_stat = n * var_k / expected_var
-            var_pval = 2 * min(chi2.cdf(chi2_stat, n - 1),
-                               1 - chi2.cdf(chi2_stat, n - 1))
+            S_re = n * np.var(re)
+            S_im = n * np.var(im)
+            chi2_stat = (S_re + S_im) / expected_var
+            df = 2 * (n - 1)
+            var_pval = 2 * min(chi2.cdf(chi2_stat, df),
+                               1 - chi2.cdf(chi2_stat, df))
             var_pvals.append(var_pval)
 
             corr = np.corrcoef(re, im)[0, 1]
@@ -209,34 +225,21 @@ def _energy_distance(X, Y):
     Energy distance between two multivariate samples.
 
     E(X,Y) = 2/(nm) sum||Xi-Yj|| - 1/n^2 sum||Xi-Xj|| - 1/m^2 sum||Yi-Yj||
+
+    Uses scipy.spatial.distance.cdist for the pairwise norms (BLAS-backed,
+    orders of magnitude faster than the earlier Python double loops, so no
+    subsampling is needed).
     """
-    n = len(X)
-    m = len(Y)
+    from scipy.spatial.distance import cdist
 
-    xy = 0.0
-    for i in range(min(n, 500)):
-        for j in range(min(m, 500)):
-            xy += np.linalg.norm(X[i] - Y[j])
-    xy *= (n * m) / (min(n, 500) * min(m, 500))
-    xy = 2 * xy / (n * m)
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
 
-    xx = 0.0
-    ns = min(n, 500)
-    for i in range(ns):
-        for j in range(i + 1, ns):
-            xx += np.linalg.norm(X[i] - X[j])
-    xx *= n * (n - 1) / (ns * (ns - 1)) if ns > 1 else 0
-    xx = xx / (n * n) if n > 0 else 0
+    xy = cdist(X, Y).mean()          # (1/nm) sum ||Xi - Yj||
+    xx = cdist(X, X).mean()          # (1/n^2) sum ||Xi - Xj||
+    yy = cdist(Y, Y).mean()          # (1/m^2) sum ||Yi - Yj||
 
-    yy = 0.0
-    ms = min(m, 500)
-    for i in range(ms):
-        for j in range(i + 1, ms):
-            yy += np.linalg.norm(Y[i] - Y[j])
-    yy *= m * (m - 1) / (ms * (ms - 1)) if ms > 1 else 0
-    yy = yy / (m * m) if m > 0 else 0
-
-    return xy - xx - yy
+    return 2 * xy - xx - yy
 
 
 def cross_key_homogeneity(data1, data2, alpha=0.001, n_perms=200):
@@ -429,11 +432,30 @@ def run_multivariate_battery(sigma, data, cov_normalized, nsamples,
     results["fft_domain"] = fft_domain_battery(sigma, data, alpha=alpha)
     results["henze_zirkler"] = henze_zirkler_test(sigma, data, alpha=alpha)
 
-    all_pass = all(
-        results[t].get("passes", True)
-        for t in ["squared_norm", "fisher_bh", "max_offdiag",
-                  "fft_domain", "henze_zirkler"]
-    )
-    results["all_pass"] = all_pass
+    # Single family verdict via Fisher's method, plus a Bonferroni gate so
+    # a lone strong flaw is never masked -- rather than AND-ing 5 tests each
+    # at alpha (which inflates the family false-alarm rate). Individual
+    # results are reported above (report-first).
+    component_pvalues = {
+        "squared_norm": results["squared_norm"]["pvalue"],
+        "fisher_bh": results["fisher_bh"]["fisher_pvalue"],
+        "max_offdiag": results["max_offdiag"]["pvalue"],
+        "fft_domain": results["fft_domain"]["fisher_pvalue"],
+        "henze_zirkler": results["henze_zirkler"]["pvalue"],
+    }
+    pvals = np.clip(np.array(list(component_pvalues.values()), dtype=float),
+                    1e-300, 1.0)
+    fisher_stat = float(-2 * np.sum(np.log(pvals)))
+    global_pvalue = float(chi2.sf(fisher_stat, 2 * len(pvals)))
+
+    k = len(pvals)
+    results["component_pvalues"] = {kk: float(v)
+                                    for kk, v in component_pvalues.items()}
+    results["fisher_stat"] = fisher_stat
+    results["global_pvalue"] = global_pvalue
+    results["bonferroni_rejects"] = [
+        name for name, p in component_pvalues.items() if p <= alpha / k]
+    results["all_pass"] = (global_pvalue > alpha
+                           and not results["bonferroni_rejects"])
 
     return results
