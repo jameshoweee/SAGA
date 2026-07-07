@@ -432,11 +432,30 @@ def run_multivariate_battery(sigma, data, cov_normalized, nsamples,
     results["fft_domain"] = fft_domain_battery(sigma, data, alpha=alpha)
     results["henze_zirkler"] = henze_zirkler_test(sigma, data, alpha=alpha)
 
-    all_pass = all(
-        results[t].get("passes", True)
-        for t in ["squared_norm", "fisher_bh", "max_offdiag",
-                  "fft_domain", "henze_zirkler"]
-    )
-    results["all_pass"] = all_pass
+    # Single family verdict via Fisher's method, plus a Bonferroni gate so
+    # a lone strong flaw is never masked -- rather than AND-ing 5 tests each
+    # at alpha (which inflates the family false-alarm rate). Individual
+    # results are reported above (report-first).
+    component_pvalues = {
+        "squared_norm": results["squared_norm"]["pvalue"],
+        "fisher_bh": results["fisher_bh"]["fisher_pvalue"],
+        "max_offdiag": results["max_offdiag"]["pvalue"],
+        "fft_domain": results["fft_domain"]["fisher_pvalue"],
+        "henze_zirkler": results["henze_zirkler"]["pvalue"],
+    }
+    pvals = np.clip(np.array(list(component_pvalues.values()), dtype=float),
+                    1e-300, 1.0)
+    fisher_stat = float(-2 * np.sum(np.log(pvals)))
+    global_pvalue = float(chi2.sf(fisher_stat, 2 * len(pvals)))
+
+    k = len(pvals)
+    results["component_pvalues"] = {kk: float(v)
+                                    for kk, v in component_pvalues.items()}
+    results["fisher_stat"] = fisher_stat
+    results["global_pvalue"] = global_pvalue
+    results["bonferroni_rejects"] = [
+        name for name, p in component_pvalues.items() if p <= alpha / k]
+    results["all_pass"] = (global_pvalue > alpha
+                           and not results["bonferroni_rejects"])
 
     return results

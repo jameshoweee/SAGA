@@ -576,12 +576,38 @@ def run_extended_battery(mu, sigma, samples, tau=14, alpha=0.001,
     results["block_homogeneity"] = block_homogeneity(
         mu, sigma, samples, tau=tau, alpha=alpha)
 
-    all_pass = all(
-        results[t].get("passes", True)
-        for t in ["tail_exceedance", "sign_halfgaussian",
-                  "discrete_ad", "higher_criticism",
-                  "ljung_box", "runs_test", "block_homogeneity"]
-    )
-    results["all_pass"] = all_pass
+    # Single family verdict via Fisher's method on the per-test p-values,
+    # rather than AND-ing 7 tests each at alpha (which inflates the family
+    # false-alarm rate to ~1-(1-alpha)^7 ~ 0.7% at alpha=1e-3). One global
+    # p keeps the family-wise rate at alpha. Individual results are still
+    # reported above (report-first), so localized flaws remain visible.
+    component_pvalues = {
+        "tail_exceedance": min(
+            (t["pvalue"] for t in results["tail_exceedance"]["thresholds"].values()),
+            default=1.0),
+        "sign_halfgaussian": results["sign_halfgaussian"]["magnitude_chi2"]["pvalue"],
+        "discrete_ad": results["discrete_ad"]["pvalue"],
+        "higher_criticism": results["higher_criticism"]["pvalue"],
+        "ljung_box": results["ljung_box"]["pvalue"],
+        "runs_test": results["runs_test"]["pvalue"],
+        "block_homogeneity": results["block_homogeneity"]["pvalue"],
+    }
+    pvals = np.clip(np.array(list(component_pvalues.values()), dtype=float),
+                    1e-300, 1.0)
+    from scipy.stats import chi2 as _chi2
+    fisher_stat = float(-2 * np.sum(np.log(pvals)))
+    global_pvalue = float(_chi2.sf(fisher_stat, 2 * len(pvals)))
+
+    results["component_pvalues"] = {k: float(v)
+                                    for k, v in component_pvalues.items()}
+    results["fisher_stat"] = fisher_stat
+    results["global_pvalue"] = global_pvalue
+    # Also expose which individual tests reject at a Bonferroni-corrected
+    # threshold, so a single strong localized flaw is never masked.
+    k = len(pvals)
+    results["bonferroni_rejects"] = [
+        name for name, p in component_pvalues.items() if p <= alpha / k]
+    results["all_pass"] = (global_pvalue > alpha
+                           and not results["bonferroni_rejects"])
 
     return results
