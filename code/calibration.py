@@ -179,13 +179,15 @@ def compute_power_matrix(mu=0.0, sigma=1.55, n=10000, reps=50,
     """
     matrix = {}
 
-    for flaw_name, flaw_gen in FLAW_LIBRARY:
+    # Enumerate index for the seed offset: hash(flaw_name) is salted per
+    # process (PYTHONHASHSEED) and would make the matrix non-reproducible.
+    for flaw_idx, (flaw_name, flaw_gen) in enumerate(FLAW_LIBRARY):
         row = {}
         for test_name in TEST_NAMES:
             detections = 0
             for r in range(reps):
                 rng = np.random.default_rng(seed + r * 1000 +
-                                            hash(flaw_name) % 10000)
+                                            flaw_idx * 1_000_000)
                 samples = flaw_gen(rng, mu, sigma, n)
                 if _run_test(test_name, mu, sigma, samples, alpha):
                     detections += 1

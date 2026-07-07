@@ -4,19 +4,26 @@
 #include <stdlib.h>
 
 /*
- * Sample from the half-Gaussian distribution using the RCDT (reverse CDT).
+ * Sample z0 from the half-Gaussian with sigma_0 = 1.8205 via CDT inversion.
  *
- * The table below is the RCDT of the half-Gaussian with sigma_0 = 1.8205,
- * matching Falcon's reference implementation. Each row is a 72-bit threshold
- * stored as three 24-bit limbs (big-endian within the row).
+ * The table below is the ascending CDT: row k holds round(2^72 * P(z0 <= k)),
+ * stored as three 24-bit limbs (most significant limb first within the row).
+ * It is identical to `halfgaussian_cdt` in sampler.py.
  *
- * The sampler draws a uniform 72-bit value and counts how many thresholds
- * it exceeds; the count is the output z0 in {0, ..., 18}.
+ * CDT inversion draws a uniform 72-bit value v and returns
+ *     z0 = #{ k : v >= cdt[k] },
+ * i.e. the number of thresholds v meets or exceeds. This matches the Python
+ * reference `sampler0()`:  z0 += (r >= elt).
+ *
+ * NOTE: this is a CDT with a ">=" count, NOT Falcon's reverse CDT (RCDT).
+ * The RCDT is descending and pairs with a "v < row" count. Mixing an
+ * ascending table with the "v < row" convention samples the mirror image
+ * (mass at |z| ~ 18 instead of ~ 0), so the count direction below matters.
  */
 
 int gaussian0()
 {
-    static const uint32_t rcdt[] = {
+    static const uint32_t cdt[] = {
          6031371U, 13708371U, 13035518U,
         11218132U, 15196352U,  8529022U,
         14516786U,  3108023U, 14040577U,
@@ -46,26 +53,29 @@ int gaussian0()
     v2 = lrand48() & 0xFFFFFF;
 
     z = 0;
-    for (u = 0; u < (sizeof rcdt) / sizeof(rcdt[0]); u += 3) {
+    for (u = 0; u < (sizeof cdt) / sizeof(cdt[0]); u += 3) {
         uint32_t w0, w1, w2, cc;
 
-        w0 = rcdt[u + 2];
-        w1 = rcdt[u + 1];
-        w2 = rcdt[u + 0];
+        w0 = cdt[u + 2];
+        w1 = cdt[u + 1];
+        w2 = cdt[u + 0];
+        /* Borrow chain: cc = 1 iff v < row (unsigned 72-bit compare). */
         cc = (v0 - w0) >> 31;
         cc = (v1 - w1 - cc) >> 31;
         cc = (v2 - w2 - cc) >> 31;
-        z += (int)cc;
+        /* Count v >= row, matching the Python reference (r >= elt). */
+        z += (int)(1 - cc);
     }
     return z;
 }
 
 
-int main()
+int main(int argc, char **argv)
 {
-    FILE *f = fopen("samples.txt", "a");
     int b, z0, z;
-    int sample_size = 1000000;
+    /* Sample count: argv[1] if given, else 1,000,000. Output goes to
+     * stdout; tests capture it and chi2-test against the folded PDT. */
+    int sample_size = (argc > 1) ? atoi(argv[1]) : 1000000;
 
     srand48(time(NULL));
 
@@ -75,9 +85,7 @@ int main()
         z = b + ((b << 1) - 1) * z0;
 
         printf("%d\n", z);
-        fprintf(f, "%d\n", z);
     }
-    fclose(f);
 
     return 0;
 }

@@ -50,8 +50,17 @@ def mc_calibrate(statistic_fn, pdt_support, pdt_probs, n, B=1000, seed=0):
 
 
 def mc_pvalue(observed, null_distribution):
-    """P-value: fraction of null values >= observed."""
-    return np.mean(null_distribution >= observed)
+    """
+    MC p-value: (1 + #{null >= observed}) / (B + 1).
+
+    The +1 correction (Davison & Hinkley) keeps the test valid at finite
+    B -- the naive #{null >= obs}/B can return 0, making the achievable
+    size coarser than the nominal alpha. For a target alpha, use
+    B >= 10/alpha replicates so 1/(B+1) sits comfortably below alpha.
+    """
+    null_distribution = np.asarray(null_distribution)
+    B = len(null_distribution)
+    return (1 + int(np.sum(null_distribution >= observed))) / (B + 1)
 
 
 # ---------------------------------------------------------------------------

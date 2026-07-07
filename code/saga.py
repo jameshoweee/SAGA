@@ -450,16 +450,22 @@ def doornik_hansen(data):
     L = diag(L)
 
     if(matrix_rank(R) < p):
-        L_diag = array([L[i, i] for i in range(p)])
-        nonzero = [i for i in range(p) if L_diag[i] > 0]
+        # Singular correlation matrix: project onto the eigenvectors with
+        # nonzero eigenvalues. The singular directions carry no
+        # information. (Selecting data COLUMNS by eigenvalue index -- as a
+        # previous version did -- is wrong: eigh's eigenvalue ordering is
+        # unrelated to the original column order, so it drops arbitrary
+        # coordinates. Reachable via mv_bad_fft_zeroed, which makes the
+        # covariance exactly singular.)
+        nonzero = [i for i in range(p) if L[i, i] > 0]
         if len(nonzero) == 0:
             return 0, 0, 0, 0
-        data = data.iloc[:, nonzero].reset_index(drop=True)
-        data.columns = range(len(nonzero))
         ppre = p
+        projected = array(data).dot(V[:, nonzero])
+        data = pandas.DataFrame(projected)
         p = len(nonzero)
-        print("NOTE: eigenvalue was zero; variables reduced "
-              "from {} to {}".format(ppre, p))
+        print("NOTE: covariance was singular; projected onto {} nonzero "
+              "eigenvectors (from {}).".format(p, ppre))
         R = corrcoef(data.transpose())
         L, V = eigh(R)
         for i in range(p):
