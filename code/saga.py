@@ -669,6 +669,12 @@ def test_falcon():
     We test:
     - univariate samples from the sampler over Z
     - multivariate samples from the signature scheme
+
+    NOTE: the ~530MB of reference sample files this reads from testdata/
+    were removed from the working tree in SAGA v2 (the suite now uses
+    generated, seeded vectors instead). To run this legacy check, restore
+    them from the paper baseline:
+        git checkout pqcrypto2020-as-published -- code/testdata
     """
 
     # We first test the Gaussian sampler over Z, using the samples in:
